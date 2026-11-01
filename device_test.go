@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -36,6 +37,7 @@ type fakeDevice struct {
 	shortcut    string
 	rpcStderr   string
 	shotContent string
+	variant     string
 }
 
 func newFakeDevice(t *testing.T) *fakeDevice {
@@ -160,6 +162,17 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 		return d.shortcut, "", 0
 	case strings.Contains(cmd, "steam-devkit-rpc"):
 		return "", d.rpcStderr, 0
+	case strings.Contains(cmd, "VARIANT_ID"):
+		return d.variant + "\n", "", 0
+	case strings.Contains(cmd, "deckard-capture"):
+		if d.shotContent == "" {
+			return `{"success": false, "error": "Is VR active?"}`, "Is VR active?", 1
+		}
+		remote := unquote(cmd[strings.Index(cmd, "--filename ")+len("--filename "):])
+		name := filepath.Join(d.home, path.Base(remote))
+		os.WriteFile(name, []byte(d.shotContent), 0o644)
+		out, _ := json.Marshal(map[string]any{"success": true, "output": remote})
+		return string(out), "", 0
 	case strings.Contains(cmd, "gamescopectl"):
 		if d.shotContent == "" {
 			return "", "no gamescope", 1
@@ -283,7 +296,7 @@ func TestDeploy(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &parms); err != nil {
 		t.Fatalf("%v in %s", err, raw)
 	}
-	if parms.Gameid != "game" || parms.Directory != sftpPath(dest) || parms.Argv[1] != "two words" ||
+	if parms.Gameid != "game" || parms.Directory != sftpPath(dest) || len(parms.Argv) != 1 || parms.Argv[0] != "run.sh 'two words'" ||
 		parms.Env == nil || parms.Settings["compat_tool"] != "x" || parms.ForceAppid == nil {
 		t.Errorf("parms %+v", parms)
 	}
@@ -412,11 +425,14 @@ func TestDeployRefusesBeforeTouchingTheDevice(t *testing.T) {
 		{"traversal gameid", deployOptions{dir: good, gameid: "../x", argv: []string{"a"}}},
 		{"empty gameid", deployOptions{dir: good, argv: []string{"a"}}},
 		{"hyphen in gameid", deployOptions{dir: good, gameid: "a-b", argv: []string{"a"}}},
-		{"single quote in argv", deployOptions{dir: good, gameid: "g", argv: []string{"a", "it's"}}},
-		{"no argv", deployOptions{dir: good, gameid: "g"}},
-		{"empty payload", deployOptions{dir: t.TempDir(), gameid: "g", argv: []string{"a"}}},
-		{"missing payload", deployOptions{dir: filepath.Join(good, "nope"), gameid: "g", argv: []string{"a"}}},
-		{"unmatchable kill", deployOptions{dir: good, gameid: "g", argv: []string{"a"}, kill: "a-very-long-process-name"}},
+		{"one character gameid", deployOptions{dir: good, gameid: "g", argv: []string{"a"}}},
+		{"digit first in gameid", deployOptions{dir: good, gameid: "1game", argv: []string{"a"}}},
+		{"reserved gameid", deployOptions{dir: good, gameid: "steam", argv: []string{"a"}}},
+		{"reserved gameid in another case", deployOptions{dir: good, gameid: "SteamVR", argv: []string{"a"}}},
+		{"no argv", deployOptions{dir: good, gameid: "game"}},
+		{"empty payload", deployOptions{dir: t.TempDir(), gameid: "game", argv: []string{"a"}}},
+		{"missing payload", deployOptions{dir: filepath.Join(good, "nope"), gameid: "game", argv: []string{"a"}}},
+		{"unmatchable kill", deployOptions{dir: good, gameid: "game", argv: []string{"a"}, kill: "a-very-long-process-name"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -464,6 +480,77 @@ func TestShot(t *testing.T) {
 	d.shotContent = ""
 	if err := dev.shot(out); err == nil {
 		t.Error("no error when the screenshot fails")
+	}
+}
+
+func TestShotOnFrameUsesItsCaptureTool(t *testing.T) {
+	d, dev := setup(t)
+	d.variant = "vr"
+	out := filepath.Join(t.TempDir(), "out.png")
+	if err := dev.shot(out); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); string(got) != "png" {
+		t.Errorf("got %q", got)
+	}
+	if got := d.commands("gamescopectl"); len(got) != 0 {
+		t.Errorf("used the Deck path: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(d.home, "devkit-utils", "deckard-capture")); err != nil {
+		t.Error(err)
+	}
+
+	d.shotContent = ""
+	if err := dev.shot(out); err == nil || !strings.Contains(err.Error(), "Is VR active?") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestDeployMakesEverythingExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake device stores files in a Windows directory")
+	}
+	d, dev := setup(t)
+	payload := writeTree(t, map[string]string{"run.sh": "x"})
+	if err := os.Chmod(filepath.Join(payload, "run.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.deploy(deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh"}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(d.home, "devkit-game", "game", "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("mode %v", info.Mode())
+	}
+}
+
+func TestCommandLine(t *testing.T) {
+	tests := []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"run.sh"}, "run.sh"},
+		{[]string{"./bin/game", "--flag=1", "a.b_c-d"}, "./bin/game --flag=1 a.b_c-d"},
+		{[]string{"run.sh", "two words"}, "run.sh 'two words'"},
+		{[]string{"run.sh", "it's"}, `run.sh 'it'\''s'`},
+		{[]string{"run.sh", "$HOME", "*.sh", ""}, `run.sh '$HOME' '*.sh' ''`},
+	}
+	for _, tt := range tests {
+		if got := commandLine(tt.argv); got != tt.want {
+			t.Errorf("%q: got %s, want %s", tt.argv, got, tt.want)
+		}
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	argv := []string{"printf", "<%s>", "two words", "it's", "$HOME", "*", ";"}
+	out, err := exec.Command(sh, "-c", commandLine(argv)).Output()
+	if want := "<two words><it's><$HOME><*><;>"; err != nil || string(out) != want {
+		t.Errorf("got %q, %v, want %q", out, err, want)
 	}
 }
 

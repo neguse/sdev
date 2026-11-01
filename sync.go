@@ -86,9 +86,12 @@ func scanLocal(fsys fs.FS) (tree, error) {
 		if err != nil {
 			return err
 		}
-		e := entry{mode: info.Mode(), size: info.Size(), mtime: info.ModTime().Unix()}
+		// Everything is sent as 0755, as the official client's rsync --chmod does:
+		// Windows and embedded files have no Unix permissions to keep.
+		e := entry{mode: info.Mode().Type() | 0o755, size: info.Size(), mtime: info.ModTime().Unix()}
 		switch {
 		case info.Mode().Type() == fs.ModeSymlink:
+			e.mode = info.Mode()
 			if e.link, err = fs.ReadLink(fsys, name); err != nil {
 				return err
 			}
@@ -100,17 +103,6 @@ func scanLocal(fsys fs.FS) (tree, error) {
 		return nil
 	})
 	return t, err
-}
-
-// allExecutable is for sources that hold no meaningful Unix permissions: on
-// Windows, and in the embedded tools.
-func allExecutable(t tree) {
-	for name, e := range t {
-		if e.mode.Type() != fs.ModeSymlink {
-			e.mode = e.mode.Type() | 0o755
-			t[name] = e
-		}
-	}
 }
 
 func scanRemote(c *sftp.Client, root string) (tree, error) {

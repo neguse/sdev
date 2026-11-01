@@ -13,7 +13,7 @@ import (
 const usage = `usage:
   sdev deploy <host> --dir DIR --gameid ID [options] -- COMMAND [ARG...]
       Send DIR to the device, deleting extra files there, and add it to Steam.
-      COMMAND is relative to DIR.
+      COMMAND is relative to DIR. Each word reaches the game as given.
         --set K=V    title setting (repeatable), for example
                      --set steam_play=0 --set compat_tool=SteamLinuxRuntime_4-arm64
         --kill NAME  with --run, stop this process first

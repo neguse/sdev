@@ -105,10 +105,16 @@ func TestScanLocalLink(t *testing.T) {
 	}
 }
 
-func TestAllExecutable(t *testing.T) {
-	got := tree{"a": file(1, 1), "d": {mode: fs.ModeDir | 0o700}, "l": {mode: fs.ModeSymlink | 0o777, link: "a"}}
-	allExecutable(got)
-	if got["a"].mode != 0o755 || got["d"].mode != fs.ModeDir|0o755 || got["l"].mode.Type() != fs.ModeSymlink {
-		t.Errorf("got %+v", got)
+func TestScanLocalMakesEverythingExecutable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := scanLocal(os.DirFS(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["a"].mode != 0o755 {
+		t.Errorf("mode %v", got["a"].mode)
 	}
 }

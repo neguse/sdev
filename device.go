@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,8 +37,14 @@ const maxProcessName = 15
 //go:embed all:devkit-utils
 var embedded embed.FS
 
-// Steam refuses to register a game ID with a hyphen.
-var validGameID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._]*$`)
+// The official client's rule. Steam itself refuses a hyphen.
+var validGameID = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]+$`)
+
+// The official client treats these as sideloaded Steam clients, not titles.
+var reservedGameIDs = []string{"steam", "steamdeckard", "steamvr", "steamvrdeckard"}
+
+// Words made only of these need no quoting, which keeps ordinary commands readable.
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./=:,+@%-]+$`)
 
 type endpoint struct {
 	host, httpPort, sshPort string
@@ -204,6 +211,20 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// commandLine builds the launch command. Steam joins argv with spaces and hands
+// it to a shell, so each word is quoted to arrive as given.
+func commandLine(argv []string) string {
+	words := make([]string, len(argv))
+	for i, word := range argv {
+		if plainWord.MatchString(word) {
+			words[i] = word
+		} else {
+			words[i] = shQuote(word)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 func (d *device) run(cmd string) (stdout, stderr string, err error) {
 	s, err := d.ssh.NewSession()
 	if err != nil {
@@ -227,7 +248,6 @@ func (d *device) syncTools() error {
 	if err != nil {
 		return err
 	}
-	allExecutable(local)
 	// Embedded files carry no mtime, so stamping them now resends all of them
 	// and a new sdev cannot leave older tools behind.
 	now := time.Now().Unix()
@@ -241,16 +261,13 @@ func (d *device) syncTools() error {
 
 func (o deployOptions) validate() (tree, error) {
 	if !validGameID.MatchString(o.gameid) {
-		return nil, fmt.Errorf("invalid game id %q", o.gameid)
+		return nil, fmt.Errorf("invalid game id %q: must match %s", o.gameid, validGameID)
+	}
+	if slices.Contains(reservedGameIDs, strings.ToLower(o.gameid)) {
+		return nil, fmt.Errorf("game id %q is reserved for sideloaded Steam clients", o.gameid)
 	}
 	if len(o.argv) == 0 {
 		return nil, errors.New("no command to launch")
-	}
-	for _, arg := range o.argv {
-		// Steam accepts such a title and then silently fails to launch it.
-		if strings.Contains(arg, "'") {
-			return nil, fmt.Errorf("Steam cannot launch a command containing a single quote: %q", arg)
-		}
 	}
 	if len(o.kill) > maxProcessName {
 		return nil, fmt.Errorf("process name %q is over %d characters, so pkill cannot match it", o.kill, maxProcessName)
@@ -262,9 +279,6 @@ func (o deployOptions) validate() (tree, error) {
 	// An empty source would delete the whole game from the device.
 	if len(local) == 0 {
 		return nil, fmt.Errorf("%s is empty", o.dir)
-	}
-	if runtime.GOOS == "windows" {
-		allExecutable(local)
 	}
 	return local, nil
 }
@@ -330,7 +344,7 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 	parms, err := json.Marshal(map[string]any{
 		"gameid":      o.gameid,
 		"directory":   directory,
-		"argv":        o.argv,
+		"argv":        []string{commandLine(o.argv)},
 		"env":         kv{},
 		"settings":    settings,
 		"force_appid": "",
@@ -357,9 +371,21 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 
 func (d *device) shot(out string) error {
 	remote := path.Join(d.home, shotName)
-	// gamescope writes the file asynchronously.
-	cmd := fmt.Sprintf("rm -f %[1]s; gamescopectl screenshot %[1]s >/dev/null 2>&1; sleep 1; test -s %[1]s", shQuote(remote))
-	if _, _, err := d.run(cmd); err != nil {
+	variant, _, err := d.run(`. /etc/os-release && echo "$VARIANT_ID"`)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(variant) == "vr" {
+		// Steam Frame has no gamescope to ask.
+		if err := d.syncTools(); err != nil {
+			return fmt.Errorf("installing devkit-utils: %w", err)
+		}
+		_, _, err = d.run("python3 ~/devkit-utils/deckard-capture --json --filename " + shQuote(remote))
+	} else {
+		// gamescope writes the file asynchronously.
+		_, _, err = d.run(fmt.Sprintf("rm -f %[1]s; gamescopectl screenshot %[1]s >/dev/null 2>&1; sleep 1; test -s %[1]s", shQuote(remote)))
+	}
+	if err != nil {
 		return fmt.Errorf("taking the screenshot: %w", err)
 	}
 	defer d.sftp.Remove(remote)
