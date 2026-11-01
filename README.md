@@ -1,6 +1,10 @@
 # sdev
 
-An unofficial command line tool that sends builds to SteamOS devkit devices (Steam Deck, Steam Frame) in developer mode. One binary with no dependencies on the host: no `ssh`, `rsync` or Python needed.
+An unofficial command line alternative to the SteamOS Devkit Client, for Steam Deck and Steam Frame.
+
+- **Compatible.** It uses the official client's key and device tools, so a device works with both.
+- **Easy to install.** One binary, with no `ssh`, `rsync` or Python needed on the host.
+- **Agent-native.** No GUI and no prompts on the host, plain exit codes, and a Claude Code plugin that teaches an agent to use it.
 
 Not affiliated with or endorsed by Valve. Steam and related marks are trademarks of Valve Corporation.
 

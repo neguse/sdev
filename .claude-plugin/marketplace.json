@@ -8,7 +8,7 @@
     {
       "name": "sdev",
       "source": "./",
-      "description": "Send builds to SteamOS devkit devices (Steam Deck, Steam Frame) and capture their screen"
+      "description": "Unofficial, agent-native CLI compatible with the SteamOS Devkit Client. One binary, nothing else to install."
     }
   ]
 }
