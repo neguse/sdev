@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -38,6 +39,7 @@ type fakeDevice struct {
 	rpcStderr   string
 	shotContent string
 	variant     string
+	execExit    int
 }
 
 func newFakeDevice(t *testing.T) *fakeDevice {
@@ -169,15 +171,34 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 			return `{"success": false, "error": "Is VR active?"}`, "Is VR active?", 1
 		}
 		remote := unquote(cmd[strings.Index(cmd, "--filename ")+len("--filename "):])
-		name := filepath.Join(d.home, path.Base(remote))
+		name := filepath.Join(d.home, "tmp", path.Base(remote))
+		os.MkdirAll(filepath.Dir(name), 0o755)
 		os.WriteFile(name, []byte(d.shotContent), 0o644)
 		out, _ := json.Marshal(map[string]any{"success": true, "output": remote})
 		return string(out), "", 0
-	case strings.Contains(cmd, "gamescopectl"):
-		if d.shotContent == "" {
-			return "", "no gamescope", 1
+	case strings.Contains(cmd, "GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT"):
+		if d.shotContent != "" {
+			os.MkdirAll(filepath.Join(d.home, "tmp"), 0o755)
+			os.WriteFile(filepath.Join(d.home, "tmp", "gamescope_1.png"), []byte(d.shotContent), 0o644)
 		}
-		os.WriteFile(filepath.Join(d.home, shotName), []byte(d.shotContent), 0o644)
+		return "", "", 0
+	case strings.Contains(cmd, "gamescope*.png") && strings.HasPrefix(cmd, "find"):
+		if _, err := os.Stat(filepath.Join(d.home, "tmp", "gamescope_1.png")); err == nil {
+			return sftpPath(filepath.Join(d.home, "tmp", "gamescope_1.png")) + "\n", "", 0
+		}
+		return "", "", 0
+	case strings.HasPrefix(cmd, "stat -c %s"):
+		info, err := os.Stat(filepath.FromSlash(strings.TrimPrefix(unquote(strings.TrimPrefix(cmd, "stat -c %s ")), "/")))
+		if err != nil {
+			info, err = os.Stat(filepath.FromSlash(unquote(strings.TrimPrefix(cmd, "stat -c %s "))))
+		}
+		if err != nil {
+			return "", err.Error(), 1
+		}
+		return fmt.Sprintln(info.Size()), "", 0
+	case cmd == "false":
+		return "", "", d.execExit
+	case cmd == "true":
 		return "", "", 0
 	}
 	return "", "", 0
@@ -217,6 +238,8 @@ func setup(t *testing.T) (*fakeDevice, *device) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { dev.Close() })
+	dev.tmp = sftpPath(filepath.Join(d.home, "tmp"))
+	dev.poll = time.Millisecond
 	return d, dev
 }
 
@@ -467,18 +490,18 @@ func TestDeployRefusesUnexpectedDirectory(t *testing.T) {
 func TestShot(t *testing.T) {
 	d, dev := setup(t)
 	out := filepath.Join(t.TempDir(), "out.png")
-	if err := dev.shot(out); err != nil {
+	if err := dev.shot(out, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(out); string(got) != "png" {
 		t.Errorf("got %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(d.home, shotName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(d.home, "tmp", "gamescope_1.png")); !os.IsNotExist(err) {
 		t.Errorf("left on device: %v", err)
 	}
 
 	d.shotContent = ""
-	if err := dev.shot(out); err == nil {
+	if err := dev.shot(out, ""); err == nil {
 		t.Error("no error when the screenshot fails")
 	}
 }
@@ -487,13 +510,13 @@ func TestShotOnFrameUsesItsCaptureTool(t *testing.T) {
 	d, dev := setup(t)
 	d.variant = "vr"
 	out := filepath.Join(t.TempDir(), "out.png")
-	if err := dev.shot(out); err != nil {
+	if err := dev.shot(out, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(out); string(got) != "png" {
 		t.Errorf("got %q", got)
 	}
-	if got := d.commands("gamescopectl"); len(got) != 0 {
+	if got := d.commands("GAMESCOPECTRL"); len(got) != 0 {
 		t.Errorf("used the Deck path: %v", got)
 	}
 	if _, err := os.Stat(filepath.Join(d.home, "devkit-utils", "deckard-capture")); err != nil {
@@ -501,7 +524,7 @@ func TestShotOnFrameUsesItsCaptureTool(t *testing.T) {
 	}
 
 	d.shotContent = ""
-	if err := dev.shot(out); err == nil || !strings.Contains(err.Error(), "Is VR active?") {
+	if err := dev.shot(out, ""); err == nil || !strings.Contains(err.Error(), "Is VR active?") {
 		t.Errorf("got %v", err)
 	}
 }

@@ -29,8 +29,6 @@ import (
 // magicPhrase is what a devkit's pairing service expects after the public key.
 const magicPhrase = "900b919520e4cf601998a71eec318fec"
 
-const shotName = ".sdev-shot.png"
-
 // pkill -x compares against the kernel's process name, cut to this length.
 const maxProcessName = 15
 
@@ -62,11 +60,22 @@ type deployOptions struct {
 	settings    kv
 	kill        string
 	run         bool
+	appid       string
+	exclude     []string
+	keepExtra   bool
+	update      bool
+	checksum    bool
 }
 
 type device struct {
+	host string
 	user string
 	home string
+	tmp  string
+	poll time.Duration
+
+	toolsSynced bool
+
 	ssh  *ssh.Client
 	sftp *sftp.Client
 }
@@ -198,7 +207,7 @@ func connect(ep endpoint, keyPath string) (*device, error) {
 		client.Close()
 		return nil, err
 	}
-	return &device{user: user, home: home, ssh: client, sftp: sc}, nil
+	return &device{host: ep.host, user: user, home: home, tmp: "/tmp", poll: 100 * time.Millisecond, ssh: client, sftp: sc}, nil
 }
 
 func (d *device) Close() error {
@@ -240,6 +249,9 @@ func (d *device) run(cmd string) (stdout, stderr string, err error) {
 }
 
 func (d *device) syncTools() error {
+	if d.toolsSynced {
+		return nil
+	}
 	tools, err := fs.Sub(embedded, "devkit-utils")
 	if err != nil {
 		return err
@@ -255,13 +267,32 @@ func (d *device) syncTools() error {
 		e.mtime = now
 		local[name] = e
 	}
-	_, err = syncTree(d.sftp, tools, local, path.Join(d.home, "devkit-utils"))
-	return err
+	if _, err = syncTree(d.sftp, tools, local, path.Join(d.home, "devkit-utils"), syncOptions{}); err != nil {
+		return fmt.Errorf("installing devkit-utils: %w", err)
+	}
+	d.toolsSynced = true
+	return nil
+}
+
+// tool runs one of the devkit-utils scripts and returns its stdout.
+func (d *device) tool(name string, args ...string) (string, error) {
+	if err := d.syncTools(); err != nil {
+		return "", err
+	}
+	out, _, err := d.run("python3 ~/devkit-utils/" + name + " " + strings.Join(args, " "))
+	return out, err
+}
+
+func checkGameID(id string) error {
+	if !validGameID.MatchString(id) {
+		return fmt.Errorf("invalid game id %q: must match %s", id, validGameID)
+	}
+	return nil
 }
 
 func (o deployOptions) validate() (tree, error) {
-	if !validGameID.MatchString(o.gameid) {
-		return nil, fmt.Errorf("invalid game id %q: must match %s", o.gameid, validGameID)
+	if err := checkGameID(o.gameid); err != nil {
+		return nil, err
 	}
 	if slices.Contains(reservedGameIDs, strings.ToLower(o.gameid)) {
 		return nil, fmt.Errorf("game id %q is reserved for sideloaded Steam clients", o.gameid)
@@ -277,6 +308,9 @@ func (o deployOptions) validate() (tree, error) {
 		return nil, err
 	}
 	// An empty source would delete the whole game from the device.
+	if err := local.exclude(o.exclude); err != nil {
+		return nil, err
+	}
 	if len(local) == 0 {
 		return nil, fmt.Errorf("%s is empty", o.dir)
 	}
@@ -288,10 +322,7 @@ func (d *device) deploy(o deployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := d.syncTools(); err != nil {
-		return fmt.Errorf("installing devkit-utils: %w", err)
-	}
-	out, _, err := d.run("python3 ~/devkit-utils/steamos-prepare-upload --gameid " + shQuote(o.gameid))
+	out, err := d.tool("steamos-prepare-upload", "--gameid", shQuote(o.gameid))
 	if err != nil {
 		return err
 	}
@@ -306,7 +337,20 @@ func (d *device) deploy(o deployOptions) error {
 		return fmt.Errorf("steamos-prepare-upload chose an unexpected directory: %s", prepared.Directory)
 	}
 
-	p, err := syncTree(d.sftp, os.DirFS(o.dir), local, prepared.Directory)
+	sync := syncOptions{keepExtra: o.keepExtra}
+	if o.checksum {
+		if sync.same, err = d.sameChecksum(os.DirFS(o.dir), prepared.Directory); err != nil {
+			return err
+		}
+	}
+	if o.update {
+		same := sync.same
+		if same == nil {
+			same = sameSizeAndTime
+		}
+		sync.same = func(name string, l, r entry) bool { return r.mtime > l.mtime || same(name, l, r) }
+	}
+	p, err := syncTree(d.sftp, os.DirFS(o.dir), local, prepared.Directory, sync)
 	if err != nil {
 		return err
 	}
@@ -324,16 +368,7 @@ func (d *device) deploy(o deployOptions) error {
 			return err
 		}
 	}
-	_, stderr, err := d.run("python3 ~/devkit-utils/steam-devkit-rpc run-game gameid=" + shQuote(o.gameid))
-	if err != nil {
-		return err
-	}
-	// The tool exits 0 on a timeout and only says so here. Success means Steam
-	// took the request, not that the game started.
-	if !strings.Contains(stderr, "success") {
-		return fmt.Errorf("run-game: %s", strings.TrimSpace(stderr))
-	}
-	return nil
+	return d.runGame(o.gameid)
 }
 
 func (d *device) createShortcut(o deployOptions, directory string) error {
@@ -347,12 +382,12 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 		"argv":        []string{commandLine(o.argv)},
 		"env":         kv{},
 		"settings":    settings,
-		"force_appid": "",
+		"force_appid": o.appid,
 	})
 	if err != nil {
 		return err
 	}
-	out, _, err := d.run("python3 ~/devkit-utils/steam-client-create-shortcut --parms " + shQuote(string(parms)))
+	out, err := d.tool("steam-client-create-shortcut", "--parms", shQuote(string(parms)))
 	if err != nil {
 		return err
 	}
@@ -367,40 +402,4 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 		return fmt.Errorf("registering with Steam: %s", strings.TrimSpace(result.Error))
 	}
 	return nil
-}
-
-func (d *device) shot(out string) error {
-	remote := path.Join(d.home, shotName)
-	variant, _, err := d.run(`. /etc/os-release && echo "$VARIANT_ID"`)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(variant) == "vr" {
-		// Steam Frame has no gamescope to ask.
-		if err := d.syncTools(); err != nil {
-			return fmt.Errorf("installing devkit-utils: %w", err)
-		}
-		_, _, err = d.run("python3 ~/devkit-utils/deckard-capture --json --filename " + shQuote(remote))
-	} else {
-		// gamescope writes the file asynchronously.
-		_, _, err = d.run(fmt.Sprintf("rm -f %[1]s; gamescopectl screenshot %[1]s >/dev/null 2>&1; sleep 1; test -s %[1]s", shQuote(remote)))
-	}
-	if err != nil {
-		return fmt.Errorf("taking the screenshot: %w", err)
-	}
-	defer d.sftp.Remove(remote)
-	src, err := d.sftp.Open(remote)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.Create(out)
-	if err != nil {
-		return err
-	}
-	if _, err := src.WriteTo(dst); err != nil {
-		dst.Close()
-		return err
-	}
-	return dst.Close()
 }

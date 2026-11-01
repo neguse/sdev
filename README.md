@@ -32,7 +32,13 @@ sdev deploy 192.168.1.21 --dir dist/game --gameid game \
 
 # Save the current screen. On Steam Frame, VR must be active.
 sdev shot 192.168.1.20 out.png
+
+# Anything else runs on the device, and its exit code comes back.
+sdev shell 192.168.1.20 'python3 ~/devkit-utils/steamos-get-status --json'
+sdev pull 192.168.1.20 'mangoapp_*.csv' out
 ```
+
+`sdev help` lists the commands. The CLI stays small on purpose: profiling, logs, device state and the rest of what the official client does are written up as guides in the [skill](skills/sdev/SKILL.md), which [maps each official feature](skills/sdev/references/coverage.md) and says what has been tried on a real device.
 
 The first connection to a device asks for approval on the device. The key is the one the official SteamOS Devkit Client uses, so a device paired with either tool works with both.
 

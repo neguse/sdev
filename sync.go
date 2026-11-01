@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -33,9 +36,16 @@ type plan struct {
 	chmod  []string
 }
 
-// diff lists what brings remote in line with local. Files count as unchanged
-// when size and mtime match, like rsync's default.
-func diff(local, remote tree) plan {
+// sameFile decides whether a local file needs no upload.
+type sameFile func(name string, local, remote entry) bool
+
+// sameSizeAndTime is rsync's default comparison.
+func sameSizeAndTime(_ string, l, r entry) bool {
+	return l.size == r.size && l.mtime == r.mtime
+}
+
+// diff lists what brings remote in line with local.
+func diff(local, remote tree, same sameFile) plan {
 	var p plan
 	for name, r := range remote {
 		l, ok := local[name]
@@ -57,7 +67,7 @@ func diff(local, remote tree) plan {
 			if replaced {
 				p.link = append(p.link, name)
 			}
-		case replaced || l.size != r.size || l.mtime != r.mtime:
+		case replaced || !same(name, l, r):
 			p.put = append(p.put, name)
 		case l.mode.Perm() != r.mode.Perm():
 			p.chmod = append(p.chmod, name)
@@ -128,8 +138,55 @@ func scanRemote(c *sftp.Client, root string) (tree, error) {
 	return t, nil
 }
 
+type syncOptions struct {
+	keepExtra bool     // leave files that are not in local
+	same      sameFile // defaults to sameSizeAndTime
+}
+
+// keepOnlyReplaced drops removals of paths local does not have.
+func (p *plan) keepOnlyReplaced(local tree) {
+	p.remove = slices.DeleteFunc(p.remove, func(name string) bool {
+		_, ok := local[name]
+		return !ok
+	})
+}
+
+// exclude removes paths matching any glob, tried on the base name and on the
+// whole relative path, along with everything below them.
+func (t tree) exclude(globs []string) error {
+	for _, glob := range globs {
+		if _, err := path.Match(glob, ""); err != nil {
+			return fmt.Errorf("bad pattern %q: %w", glob, err)
+		}
+	}
+	for name := range t {
+		for at := name; at != "."; at = path.Dir(at) {
+			if matchesAny(globs, at) {
+				delete(t, name)
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func matchesAny(globs []string, name string) bool {
+	for _, glob := range globs {
+		if ok, _ := path.Match(glob, name); ok {
+			return true
+		}
+		if ok, _ := path.Match(glob, path.Base(name)); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // syncTree makes the directory root on the device match local, read from fsys.
-func syncTree(c *sftp.Client, fsys fs.FS, local tree, root string) (plan, error) {
+func syncTree(c *sftp.Client, fsys fs.FS, local tree, root string, o syncOptions) (plan, error) {
+	if o.same == nil {
+		o.same = sameSizeAndTime
+	}
 	if err := c.MkdirAll(root); err != nil {
 		return plan{}, fmt.Errorf("%s: %w", root, err)
 	}
@@ -137,7 +194,10 @@ func syncTree(c *sftp.Client, fsys fs.FS, local tree, root string) (plan, error)
 	if err != nil {
 		return plan{}, err
 	}
-	p := diff(local, remote)
+	p := diff(local, remote, o.same)
+	if o.keepExtra {
+		p.keepOnlyReplaced(local)
+	}
 	for _, name := range p.remove {
 		if err := c.Remove(path.Join(root, name)); err != nil {
 			return p, fmt.Errorf("remove %s: %w", name, err)
@@ -198,4 +258,70 @@ func putFile(c *sftp.Client, fsys fs.FS, name string, e entry, target string) er
 		return err
 	}
 	return c.PosixRename(tmp, target)
+}
+
+// pullTree copies files under root to dest when their size or mtime differ, and
+// returns how many it copied. A missing root copies nothing.
+func pullTree(c *sftp.Client, root, dest string, include func(name string) bool) (int, error) {
+	if _, err := c.Stat(root); errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	root, err := c.RealPath(root)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", root, err)
+	}
+	remote, err := scanRemote(c, root)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", root, err)
+	}
+	copied := 0
+	for name, e := range remote {
+		if !e.mode.IsRegular() || !include(name) {
+			continue
+		}
+		n, err := pullFile(c, path.Join(root, name), name, e, dest)
+		if err != nil {
+			return copied, err
+		}
+		copied += n
+	}
+	return copied, nil
+}
+
+// pullFile copies one file to name under dest unless it is already there, and
+// returns how many it copied.
+func pullFile(c *sftp.Client, remote, name string, e entry, dest string) (int, error) {
+	// The device chooses these names, so they must not escape dest.
+	if !filepath.IsLocal(filepath.FromSlash(name)) {
+		return 0, fmt.Errorf("refusing remote path %q", name)
+	}
+	target := filepath.Join(dest, filepath.FromSlash(name))
+	if info, err := os.Stat(target); err == nil && info.Size() == e.size && info.ModTime().Unix() == e.mtime {
+		return 0, nil
+	}
+	if err := getFile(c, remote, target); err != nil {
+		return 0, fmt.Errorf("download %s: %w", name, err)
+	}
+	mtime := time.Unix(e.mtime, 0)
+	return 1, os.Chtimes(target, mtime, mtime)
+}
+
+func getFile(c *sftp.Client, remote, local string) error {
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	src, err := c.Open(remote)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(local)
+	if err != nil {
+		return err
+	}
+	if _, err := src.WriteTo(dst); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }
