@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 )
@@ -48,7 +47,16 @@ func main() {
 			log.Fatalf("%s has no license file in %s", name, dir)
 		}
 	}
-	add("Go standard library", runtime.GOROOT())
+	goroot, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		log.Fatal(err)
+	}
+	stdlib := strings.TrimSpace(string(goroot))
+	// Distribution packages may keep it apart from GOROOT.
+	if _, err := os.Stat(filepath.Join(stdlib, "LICENSE")); err != nil {
+		stdlib = "/usr/share/licenses/go"
+	}
+	add("Go standard library", stdlib)
 	add("devkit-utils", "devkit-utils")
 	for _, line := range lines {
 		module, dir, _ := strings.Cut(line, " ")
