@@ -10,6 +10,12 @@ Not affiliated with or endorsed by Valve. Steam and related marks are trademarks
 go install github.com/neguse/sdev@latest
 ```
 
+For Claude Code, the repository is also a plugin with a skill that drives the CLI:
+
+```
+/plugin install sdev --marketplace neguse/sdev
+```
+
 ## Usage
 
 ```sh

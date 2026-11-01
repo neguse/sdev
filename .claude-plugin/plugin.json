@@ -1,0 +1,8 @@
+{
+  "name": "sdev",
+  "version": "0.1.0",
+  "description": "Send builds to SteamOS devkit devices (Steam Deck, Steam Frame) and capture their screen",
+  "author": {
+    "name": "neguse"
+  }
+}
