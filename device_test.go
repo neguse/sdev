@@ -170,6 +170,8 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 		return d.shortcut, "", 0
 	case strings.Contains(cmd, "steam-devkit-rpc"):
 		return "", d.rpcStderr, 0
+	case strings.HasPrefix(cmd, "uname -n;"):
+		return "fakehost\n" + d.variant + "\n", "", 0
 	case strings.Contains(cmd, "VARIANT_ID"):
 		return d.variant + "\n", "", 0
 	case strings.Contains(cmd, "deckard-capture"):
