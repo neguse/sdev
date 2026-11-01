@@ -154,7 +154,7 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 		id := unquote(cmd[strings.Index(cmd, "--gameid ")+len("--gameid "):])
 		dir := filepath.Join(d.home, "devkit-game", id)
 		os.MkdirAll(dir, 0o755)
-		out, _ := json.Marshal(map[string]string{"user": "steamos", "directory": filepath.ToSlash(dir)})
+		out, _ := json.Marshal(map[string]string{"user": "steamos", "directory": sftpPath(dir)})
 		return string(out), "", 0
 	case strings.Contains(cmd, "steam-client-create-shortcut"):
 		return d.shortcut, "", 0
@@ -168,6 +168,16 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 		return "", "", 0
 	}
 	return "", "", 0
+}
+
+// sftpPath spells a local path the way the SFTP server expects it: on Windows,
+// C:\\x is /C:/x, and C:/x would read as relative.
+func sftpPath(p string) string {
+	p = filepath.ToSlash(p)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
 }
 
 func unquote(s string) string {
@@ -273,7 +283,7 @@ func TestDeploy(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &parms); err != nil {
 		t.Fatalf("%v in %s", err, raw)
 	}
-	if parms.Gameid != "game" || parms.Directory != filepath.ToSlash(dest) || parms.Argv[1] != "it's" ||
+	if parms.Gameid != "game" || parms.Directory != sftpPath(dest) || parms.Argv[1] != "it's" ||
 		parms.Env["A"] != "1" || parms.Settings["compat_tool"] != "x" || parms.ForceAppid == nil {
 		t.Errorf("parms %+v", parms)
 	}
@@ -300,9 +310,6 @@ func TestDeploy(t *testing.T) {
 }
 
 func TestDeploySkipsUnchangedFiles(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the SFTP test server does not set mtimes on Windows")
-	}
 	d, dev := setup(t)
 	payload := writeTree(t, map[string]string{"run.sh": "x"})
 	opts := deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh"}}
@@ -427,7 +434,7 @@ func TestDeployRefusesUnexpectedDirectory(t *testing.T) {
 	if err := os.WriteFile(precious, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, _ := json.Marshal(map[string]string{"directory": filepath.ToSlash(d.home)})
+	out, _ := json.Marshal(map[string]string{"directory": sftpPath(d.home)})
 	d.prepareOut = string(out)
 	payload := writeTree(t, map[string]string{"run.sh": "x"})
 	err := dev.deploy(deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh"}})
