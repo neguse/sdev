@@ -14,11 +14,10 @@ const usage = `usage:
   sdev deploy <host> --dir DIR --gameid ID [options] -- COMMAND [ARG...]
       Send DIR to the device, deleting extra files there, and add it to Steam.
       COMMAND is relative to DIR.
-        --env K=V    environment variable (repeatable)
         --set K=V    title setting (repeatable), for example
                      --set steam_play=0 --set compat_tool=SteamLinuxRuntime_4-arm64
         --kill NAME  with --run, stop this process first
-        --run        launch it afterwards
+        --run        ask Steam to launch it afterwards
   sdev shot <host> FILE
       Save the device's current screen as a PNG.
 `
@@ -55,7 +54,6 @@ func parseDeploy(args []string) (deployCommand, error) {
 	f.SetOutput(io.Discard)
 	f.StringVar(&c.dir, "dir", "", "")
 	f.StringVar(&c.gameid, "gameid", "", "")
-	f.Var(&c.env, "env", "")
 	f.Var(&c.settings, "set", "")
 	f.StringVar(&c.kill, "kill", "", "")
 	f.BoolVar(&c.run, "run", false, "")

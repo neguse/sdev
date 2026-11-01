@@ -26,6 +26,8 @@ sdev shot 192.168.1.20 out.png
 
 The first connection to a device asks for approval on the device. The key is the one the official SteamOS Devkit Client uses, so a device paired with either tool works with both.
 
+Steam on Steam Deck refuses game IDs containing a hyphen, so sdev does too. `--run` reports that Steam took the request, not that the game started. To set environment variables, export them in the launch script.
+
 `deploy` deletes files on the device that are not in `--dir`. Files with the same size and mtime are skipped. On Windows every file is sent as executable, because Windows has no Unix permissions to read.
 
 ## Third-party code

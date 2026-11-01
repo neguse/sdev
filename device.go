@@ -36,7 +36,8 @@ const maxProcessName = 15
 //go:embed all:devkit-utils
 var embedded embed.FS
 
-var validGameID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+// Steam refuses to register a game ID with a hyphen.
+var validGameID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._]*$`)
 
 type endpoint struct {
 	host, httpPort, sshPort string
@@ -51,7 +52,6 @@ type kv map[string]string
 type deployOptions struct {
 	dir, gameid string
 	argv        []string
-	env         kv
 	settings    kv
 	kill        string
 	run         bool
@@ -246,6 +246,12 @@ func (o deployOptions) validate() (tree, error) {
 	if len(o.argv) == 0 {
 		return nil, errors.New("no command to launch")
 	}
+	for _, arg := range o.argv {
+		// Steam accepts such a title and then silently fails to launch it.
+		if strings.Contains(arg, "'") {
+			return nil, fmt.Errorf("Steam cannot launch a command containing a single quote: %q", arg)
+		}
+	}
 	if len(o.kill) > maxProcessName {
 		return nil, fmt.Errorf("process name %q is over %d characters, so pkill cannot match it", o.kill, maxProcessName)
 	}
@@ -308,7 +314,8 @@ func (d *device) deploy(o deployOptions) error {
 	if err != nil {
 		return err
 	}
-	// The tool exits 0 on a timeout and only says so here.
+	// The tool exits 0 on a timeout and only says so here. Success means Steam
+	// took the request, not that the game started.
 	if !strings.Contains(stderr, "success") {
 		return fmt.Errorf("run-game: %s", strings.TrimSpace(stderr))
 	}
@@ -316,10 +323,7 @@ func (d *device) deploy(o deployOptions) error {
 }
 
 func (d *device) createShortcut(o deployOptions, directory string) error {
-	env, settings := o.env, o.settings
-	if env == nil {
-		env = kv{}
-	}
+	settings := o.settings
 	if settings == nil {
 		settings = kv{}
 	}
@@ -327,7 +331,7 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 		"gameid":      o.gameid,
 		"directory":   directory,
 		"argv":        o.argv,
-		"env":         env,
+		"env":         kv{},
 		"settings":    settings,
 		"force_appid": "",
 	})
@@ -346,7 +350,7 @@ func (d *device) createShortcut(o deployOptions, directory string) error {
 		return fmt.Errorf("steam-client-create-shortcut: %w in %q", err, out)
 	}
 	if result.Error != "" {
-		return fmt.Errorf("registering with Steam: %s", result.Error)
+		return fmt.Errorf("registering with Steam: %s", strings.TrimSpace(result.Error))
 	}
 	return nil
 }

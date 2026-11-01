@@ -171,7 +171,7 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 }
 
 // sftpPath spells a local path the way the SFTP server expects it: on Windows,
-// C:\\x is /C:/x, and C:/x would read as relative.
+// C:\x is /C:/x, and C:/x would read as relative.
 func sftpPath(p string) string {
 	p = filepath.ToSlash(p)
 	if !strings.HasPrefix(p, "/") {
@@ -256,7 +256,7 @@ func TestConnectUnreachableNamesTheHost(t *testing.T) {
 func TestDeploy(t *testing.T) {
 	d, dev := setup(t)
 	payload := writeTree(t, map[string]string{"run.sh": "#!/bin/sh\n", "data/a.txt": "aaa"})
-	opts := deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh", "it's"}, env: kv{"A": "1"}, settings: kv{"compat_tool": "x"}}
+	opts := deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh", "two words"}, settings: kv{"compat_tool": "x"}}
 	if err := dev.deploy(opts); err != nil {
 		t.Fatal(err)
 	}
@@ -283,8 +283,8 @@ func TestDeploy(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &parms); err != nil {
 		t.Fatalf("%v in %s", err, raw)
 	}
-	if parms.Gameid != "game" || parms.Directory != sftpPath(dest) || parms.Argv[1] != "it's" ||
-		parms.Env["A"] != "1" || parms.Settings["compat_tool"] != "x" || parms.ForceAppid == nil {
+	if parms.Gameid != "game" || parms.Directory != sftpPath(dest) || parms.Argv[1] != "two words" ||
+		parms.Env == nil || parms.Settings["compat_tool"] != "x" || parms.ForceAppid == nil {
 		t.Errorf("parms %+v", parms)
 	}
 	if got := d.commands("steam-devkit-rpc"); len(got) != 0 {
@@ -390,9 +390,9 @@ func TestDeployReportsToolFailures(t *testing.T) {
 	opts := deployOptions{dir: payload, gameid: "game", argv: []string{"run.sh"}, run: true}
 
 	d, dev := setup(t)
-	d.shortcut = `{"error": "The Steam client is not running."}`
-	if err := dev.deploy(opts); err == nil || !strings.Contains(err.Error(), "not running") {
-		t.Errorf("shortcut: %v", err)
+	d.shortcut = `{"error": "The Steam client is not running.\n"}`
+	if err := dev.deploy(opts); err == nil || !strings.HasSuffix(err.Error(), "not running.") {
+		t.Errorf("shortcut: %q", err)
 	}
 
 	d, dev = setup(t)
@@ -411,6 +411,8 @@ func TestDeployRefusesBeforeTouchingTheDevice(t *testing.T) {
 	}{
 		{"traversal gameid", deployOptions{dir: good, gameid: "../x", argv: []string{"a"}}},
 		{"empty gameid", deployOptions{dir: good, argv: []string{"a"}}},
+		{"hyphen in gameid", deployOptions{dir: good, gameid: "a-b", argv: []string{"a"}}},
+		{"single quote in argv", deployOptions{dir: good, gameid: "g", argv: []string{"a", "it's"}}},
 		{"no argv", deployOptions{dir: good, gameid: "g"}},
 		{"empty payload", deployOptions{dir: t.TempDir(), gameid: "g", argv: []string{"a"}}},
 		{"missing payload", deployOptions{dir: filepath.Join(good, "nope"), gameid: "g", argv: []string{"a"}}},
@@ -496,15 +498,15 @@ func TestKeyPath(t *testing.T) {
 }
 
 func TestParseArgs(t *testing.T) {
-	cmd, err := parseDeploy([]string{"10.0.0.1", "--dir", "d", "--gameid", "g", "--env", "A=1", "--set", "x=y=z", "--kill", "p", "--run", "--", "run.sh", "--flag"})
+	cmd, err := parseDeploy([]string{"10.0.0.1", "--dir", "d", "--gameid", "g", "--set", "x=y=z", "--kill", "p", "--run", "--", "run.sh", "--flag"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.host != "10.0.0.1" || cmd.dir != "d" || cmd.gameid != "g" || !cmd.run || cmd.kill != "p" ||
-		cmd.env["A"] != "1" || cmd.settings["x"] != "y=z" || len(cmd.argv) != 2 || cmd.argv[1] != "--flag" {
+		cmd.settings["x"] != "y=z" || len(cmd.argv) != 2 || cmd.argv[1] != "--flag" {
 		t.Errorf("got %+v", cmd)
 	}
-	for _, args := range [][]string{{}, {"--dir", "d"}, {"h", "--env", "noequals"}} {
+	for _, args := range [][]string{{}, {"--dir", "d"}, {"h", "--set", "noequals"}} {
 		if _, err := parseDeploy(args); err == nil {
 			t.Errorf("%v: no error", args)
 		}
