@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -79,12 +80,21 @@ Device state
                                     steamdeckard, steamvr or steamvrdeckard
   passwd <host>                     Change the device's password, interactively
   reset-steam <host> --yes          Delete Steam and ALL its content from the device
+
+  licenses                          Print the licenses of sdev and what it includes
 `
 
 // exitCodeError carries a remote command's exit code to sdev's own.
 type exitCodeError int
 
 func (e exitCodeError) Error() string { return fmt.Sprintf("exit code %d", int(e)) }
+
+//go:generate go run ./tools/genlicenses
+//go:embed LICENSE
+var ownLicense string
+
+//go:embed third_party_licenses.txt
+var thirdPartyLicenses string
 
 // usageError is a mistake in the command line, as opposed to a failed operation.
 type usageError struct{ error }
@@ -215,6 +225,9 @@ func run(args []string) error {
 	switch cmd {
 	case "help":
 		fmt.Print(usage)
+		return nil
+	case "licenses":
+		fmt.Print(ownLicense + "\n" + thirdPartyLicenses)
 		return nil
 	case "devices":
 		timeout := f.Duration("timeout", 3*time.Second, "")

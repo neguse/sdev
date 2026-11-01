@@ -54,4 +54,4 @@ Game IDs follow the official client's rule, `^[A-Za-z_][A-Za-z0-9_.]+$`, and may
 
 ## Third-party code
 
-`devkit-utils/` is copied unchanged from [SteamOS Devkit Client](https://gitlab.steamos.cloud/devkit/steamos-devkit) (`client/devkit-utils`, commit `e091c17`), MIT licensed: see [devkit-utils/LICENSE](devkit-utils/LICENSE). sdev embeds it and installs it on the device on each deploy.
+`devkit-utils/` is copied unchanged from [SteamOS Devkit Client](https://gitlab.steamos.cloud/devkit/steamos-devkit) (`client/devkit-utils`, commit `e091c17`), MIT licensed: see [devkit-utils/LICENSE](devkit-utils/LICENSE). sdev embeds it and installs it on the device when it needs it. `sdev licenses` prints the licenses of everything in the binary.
