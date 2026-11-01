@@ -1,0 +1,8 @@
+{
+  "name": "sdev",
+  "version": "0.1.0",
+  "description": "Unofficial, agent-native CLI compatible with the SteamOS Devkit Client. One binary, nothing else to install.",
+  "author": {
+    "name": "neguse"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "sdev",
+  "owner": { "name": "neguse" },
+  "metadata": {
+    "description": "sdev plugin marketplace (the plugin repo doubles as its own marketplace)"
+  },
+  "plugins": [
+    {
+      "name": "sdev",
+      "source": "./",
+      "description": "Unofficial, agent-native CLI compatible with the SteamOS Devkit Client. One binary, nothing else to install."
+    }
+  ]
+}
