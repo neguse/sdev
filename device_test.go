@@ -40,6 +40,12 @@ type fakeDevice struct {
 	shotContent string
 	variant     string
 	execExit    int
+
+	status         string
+	games          string
+	traceFailsOnce bool
+	rgpMissing     bool
+	controllerErr  string
 }
 
 func newFakeDevice(t *testing.T) *fakeDevice {
@@ -155,7 +161,7 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 		if d.prepareOut != "" {
 			return d.prepareOut, "", 0
 		}
-		id := unquote(cmd[strings.Index(cmd, "--gameid ")+len("--gameid "):])
+		id := unquote(strings.Fields(cmd[strings.Index(cmd, "--gameid ")+len("--gameid "):])[0])
 		dir := filepath.Join(d.home, "devkit-game", id)
 		os.MkdirAll(dir, 0o755)
 		out, _ := json.Marshal(map[string]string{"user": "steamos", "directory": sftpPath(dir)})
@@ -196,6 +202,31 @@ func (d *fakeDevice) exec(cmd string) (stdout, stderr string, code int) {
 			return "", err.Error(), 1
 		}
 		return fmt.Sprintln(info.Size()), "", 0
+	case strings.Contains(cmd, "steamos-get-status"):
+		return d.status, "", 0
+	case strings.Contains(cmd, "steamos-list-games"):
+		return d.games, "", 0
+	case strings.Contains(cmd, "steamos-dump-controller-config"):
+		if d.controllerErr != "" {
+			out, _ := json.Marshal(map[string]string{"error": d.controllerErr})
+			return string(out), "", 0
+		}
+		return `{"success": "ok"}`, "", 0
+	case strings.HasPrefix(cmd, "mktemp"):
+		return sftpPath(filepath.Join(d.home, "trace.zip")) + "\n", "", 0
+	case strings.Contains(cmd, "gpu-trace --capture"):
+		if d.traceFailsOnce {
+			d.traceFailsOnce = false
+			return "", "Failed to capture trace", 1
+		}
+		os.WriteFile(filepath.Join(d.home, "trace.zip"), []byte("trace"), 0o644)
+		return "", "", 0
+	case strings.HasPrefix(cmd, "ls -1t"):
+		if d.rgpMissing {
+			return "", "none", 2
+		}
+		os.WriteFile(filepath.Join(d.home, "tmp_1.rgp"), []byte("rgp"), 0o644)
+		return sftpPath(filepath.Join(d.home, "tmp_1.rgp")) + "\n", "", 0
 	case cmd == "false":
 		return "", "", d.execExit
 	case cmd == "true":

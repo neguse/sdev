@@ -65,6 +65,8 @@ type deployOptions struct {
 	keepExtra   bool
 	update      bool
 	checksum    bool
+	// Stops SteamOS repairing a client that keeps exiting quickly, for debugging one.
+	preventRepair bool
 }
 
 type device struct {
@@ -303,18 +305,46 @@ func (o deployOptions) validate() (tree, error) {
 	if len(o.kill) > maxProcessName {
 		return nil, fmt.Errorf("process name %q is over %d characters, so pkill cannot match it", o.kill, maxProcessName)
 	}
+	return o.scan()
+}
+
+// scan reads the source directory.
+func (o deployOptions) scan() (tree, error) {
 	local, err := scanLocal(os.DirFS(o.dir))
 	if err != nil {
 		return nil, err
 	}
-	// An empty source would delete the whole game from the device.
 	if err := local.exclude(o.exclude); err != nil {
 		return nil, err
 	}
+	// An empty source would delete the whole game from the device.
 	if len(local) == 0 {
 		return nil, fmt.Errorf("%s is empty", o.dir)
 	}
 	return local, nil
+}
+
+// prepareUpload asks the device where a title goes. The sync deletes anything
+// extra there, so the answer is not trusted blindly.
+func (d *device) prepareUpload(gameid string, preventRepair bool) (string, error) {
+	args := []string{"--gameid", shQuote(gameid)}
+	if preventRepair {
+		args = append(args, "--prevent-auto-repair", "1")
+	}
+	out, err := d.tool("steamos-prepare-upload", args...)
+	if err != nil {
+		return "", err
+	}
+	var prepared struct {
+		Directory string `json:"directory"`
+	}
+	if err := json.Unmarshal([]byte(out), &prepared); err != nil {
+		return "", fmt.Errorf("steamos-prepare-upload: %w in %q", err, out)
+	}
+	if path.Base(prepared.Directory) != gameid || path.Base(path.Dir(prepared.Directory)) != "devkit-game" {
+		return "", fmt.Errorf("steamos-prepare-upload chose an unexpected directory: %s", prepared.Directory)
+	}
+	return prepared.Directory, nil
 }
 
 func (d *device) deploy(o deployOptions) error {
@@ -322,24 +352,14 @@ func (d *device) deploy(o deployOptions) error {
 	if err != nil {
 		return err
 	}
-	out, err := d.tool("steamos-prepare-upload", "--gameid", shQuote(o.gameid))
+	directory, err := d.prepareUpload(o.gameid, o.preventRepair)
 	if err != nil {
 		return err
-	}
-	var prepared struct {
-		Directory string `json:"directory"`
-	}
-	if err := json.Unmarshal([]byte(out), &prepared); err != nil {
-		return fmt.Errorf("steamos-prepare-upload: %w in %q", err, out)
-	}
-	// The sync deletes anything extra, so never trust this path blindly.
-	if path.Base(prepared.Directory) != o.gameid || path.Base(path.Dir(prepared.Directory)) != "devkit-game" {
-		return fmt.Errorf("steamos-prepare-upload chose an unexpected directory: %s", prepared.Directory)
 	}
 
 	sync := syncOptions{keepExtra: o.keepExtra}
 	if o.checksum {
-		if sync.same, err = d.sameChecksum(os.DirFS(o.dir), prepared.Directory); err != nil {
+		if sync.same, err = d.sameChecksum(os.DirFS(o.dir), directory); err != nil {
 			return err
 		}
 	}
@@ -350,13 +370,13 @@ func (d *device) deploy(o deployOptions) error {
 		}
 		sync.same = func(name string, l, r entry) bool { return r.mtime > l.mtime || same(name, l, r) }
 	}
-	p, err := syncTree(d.sftp, os.DirFS(o.dir), local, prepared.Directory, sync)
+	p, err := syncTree(d.sftp, os.DirFS(o.dir), local, directory, sync)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: %d sent, %d removed\n", prepared.Directory, len(p.put)+len(p.link), len(p.remove))
+	fmt.Printf("%s: %d sent, %d removed\n", directory, len(p.put)+len(p.link), len(p.remove))
 
-	if err := d.createShortcut(o, prepared.Directory); err != nil {
+	if err := d.createShortcut(o, directory); err != nil {
 		return err
 	}
 	if !o.run {
