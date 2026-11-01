@@ -4,6 +4,14 @@
 sdev shell <host> 'python3 ~/devkit-utils/steamos-list-games'
 ```
 
+## Running as another AppID
+
+`deploy --appid N` makes the title run as that app, and Steam refuses unless it is installed. For the Steamworks sample app 480, which the store does not list, start the install and have the person follow the prompt on the device:
+
+```sh
+sdev shell <host> 'steam steam://install/480'
+```
+
 ## Deleting
 
 `steamos-delete` puts the name into a shell command, so use only names `sdev` accepts as game IDs. Its leftover settings files need removing too.
