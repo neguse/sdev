@@ -17,6 +17,8 @@ const usage = `usage: sdev COMMAND ...
 
 Finding and pairing
   devices [--timeout D]             Find devices on this network, as JSON
+  history                           Devices connected to before, newest first, and
+                                    whether each answers now, as JSON
   pair <host>                       Pair with a device and install its tools;
                                     asks for approval on the device
 
@@ -180,6 +182,12 @@ func withDevice(host string, do func(*device) error) error {
 		return err
 	}
 	defer d.Close()
+	if file, err := historyPath(); err == nil {
+		err = recordConnection(file, d.historyEntry())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sdev: recording this device in the history: %v\n", err)
+		}
+	}
 	return do(d)
 }
 
@@ -239,6 +247,23 @@ func run(args []string) error {
 			return err
 		}
 		out, err := json.MarshalIndent(found, "", "  ")
+		return printResult(string(out), err)
+	case "history":
+		if _, err := positional(cmd, args, 0, f); err != nil {
+			return err
+		}
+		file, err := historyPath()
+		if err != nil {
+			return err
+		}
+		entries, err := readHistory(file, func(address string) bool {
+			_, err := loginName(defaultEndpoint(address))
+			return err == nil
+		})
+		if err != nil {
+			return err
+		}
+		out, err := json.MarshalIndent(entries, "", "  ")
 		return printResult(string(out), err)
 	case "deploy":
 		c, err := parseDeploy(args)

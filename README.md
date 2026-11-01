@@ -44,7 +44,7 @@ sdev shell 192.168.1.20 'pgrep -x game'
 
 ## Supported
 
-Confirmed working on a real Steam Deck: `pair`, `deploy`, `run`, `ls`, `rm`, `status`, `shot`, `logs`, `shell`, `pull`, `push`, `perf overlay`, `gpu-trace`, `renderdoc-server`, `flags`, `controller --appid`, `restart`, `session`, `client`.
+Confirmed working on a real Steam Deck: `history`, `pair`, `deploy`, `run`, `ls`, `rm`, `status`, `shot`, `logs`, `shell`, `pull`, `push`, `perf overlay`, `gpu-trace`, `renderdoc-server`, `flags`, `controller --appid`, `restart`, `session`, `client`.
 
 The first connection to a device asks for approval on the device. The key is the one the official SteamOS Devkit Client uses, so a device paired with either tool works with both.
 
