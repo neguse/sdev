@@ -10,9 +10,21 @@ Not affiliated with or endorsed by Valve. Steam and related marks are trademarks
 
 ## Install
 
+Download the binary from the [latest release](https://github.com/neguse/sdev/releases/latest) into a directory on PATH:
+
 ```sh
-go install github.com/neguse/sdev@latest
+# Linux x86_64. On ARM use sdev-linux-arm64, on Apple silicon sdev-darwin-arm64.
+mkdir -p ~/.local/bin
+curl -fsSL -o ~/.local/bin/sdev https://github.com/neguse/sdev/releases/latest/download/sdev-linux-amd64
+chmod +x ~/.local/bin/sdev
 ```
+
+```powershell
+# Windows x64
+Invoke-WebRequest -OutFile sdev.exe https://github.com/neguse/sdev/releases/latest/download/sdev-windows-amd64.exe
+```
+
+With Go, `go install github.com/neguse/sdev@latest` builds it instead.
 
 For Claude Code, the repository is also a plugin with a skill that drives the CLI:
 
