@@ -5,7 +5,7 @@ description: Drives a Steam Deck or Steam Frame in developer mode through the sd
 
 # sdev
 
-If `sdev` is not on PATH, install it with `go install github.com/neguse/sdev@latest`. `sdev help` lists every command, and `sdev shell <host> '...'` runs anything else on the device.
+If `sdev` is not on PATH, download `https://github.com/neguse/sdev/releases/latest/download/sdev-OS-ARCH`, where `OS-ARCH` is `linux-amd64`, `linux-arm64`, `darwin-arm64` or `windows-amd64.exe`, into a directory on PATH and make it executable. With Go, `go install github.com/neguse/sdev@latest` also works. `sdev help` lists every command, and `sdev shell <host> '...'` runs anything else on the device.
 
 Take the host, game ID, build directory and launch command from the project's docs or build files. If the host is not recorded, look in `sdev history`, then `sdev devices`, which only finds devices on the same subnet. A device in the history with `reachable: false` is probably asleep or has a new address, so ask the person to wake it before asking for anything else.
 
